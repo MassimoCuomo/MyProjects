@@ -1,0 +1,117 @@
+---
+title: "NYPD Shooting Incident Analysis"
+author: "Massimo Cuomo"
+date: "2024-06-25"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load Libraries
+```{r library, echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(sf)
+```
+
+Load Dataset
+```{r data, echo=TRUE}
+data <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+```{r tidy}
+# Tidy the data
+data <- data %>%
+  rename_all(tolower) %>%
+  rename(
+    date = occur_date,
+    time = occur_time,
+    borough = boro
+  ) %>%
+  mutate(
+    date = as.Date(date, format="%m/%d/%Y"),
+    time = hms::as_hms(time),
+    hour = hour(time),
+    year = year(date),
+    month = month(date),
+    day_of_week = weekdays(date)
+  )
+```
+
+```{r intro}
+# View Cleaned Dataset Structure
+str(data)
+```
+
+```{r geography}
+# Remove rows with missing latitude or longitude
+data_clean <- data %>%
+  filter(!is.na(latitude) & !is.na(longitude))
+
+# Convert to spatial data frame
+data_sf <- st_as_sf(data_clean, coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+# Plot the geographic distribution
+ggplot(data_sf) +
+  geom_sf() +
+  labs(title = "Geographic Distribution of Shooting Incidents")
+```
+
+```{r timing}
+# Plot incidents by time of day
+data_hourly <- data %>%
+  mutate(hour = hour(time)) %>%
+  group_by(hour) %>%
+  summarise(incidents = n())
+
+ggplot(data_hourly) +
+  geom_line(aes(x = hour, y = incidents)) +
+  labs(title = "Shooting Incidents by Time of Day", x = "Time", y = "Incidents")
+
+# Plot incidents by day of the week
+ggplot(data) +
+  geom_bar(aes(x = day_of_week), fill = "steelblue") +
+  labs(title = "Shooting Incidents by Day of the Week", x = "Day", y = "Incidents")
+
+# Plot incidents by year
+ggplot(data) +
+  geom_bar(aes(x = factor(year)), fill = "steelblue") +
+  labs(title = "Shooting Incidents by Year", x = "Year", y = "Incidents")
+```
+
+```{r model, message=FALSE}
+# Aggregate incident data by perpetrator race and sex
+data_model <- data %>%
+  filter(perp_race != "", !is.null(perp_race), perp_sex != "", !is.null(perp_sex)) %>%
+  group_by(perp_race, perp_sex) %>%
+  summarise(incidents = n()) %>%
+  ungroup()
+# Create model
+model <- lm(incidents ~ perp_race + perp_sex, data = data_model)
+```
+
+```{r model_visual, fig.height = 7.5, fig.width = 10}
+# Predict incidents based on the model
+data_model$predicted_incidents <- predict(model, newdata = data_model)
+
+# Plot actual vs predicted incidents
+ggplot(data_model) +
+  geom_point(aes(x = incidents, y = predicted_incidents, color = perp_race), size = 3) +
+  geom_text(aes(x = incidents, y = predicted_incidents, label = perp_sex), vjust = -1, size = 4) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Shooting Incidents by Race and Sex", x = "Actual Incidents", y = "Predicted Incidents") +
+  theme_minimal()
+```
+
+### Possible Biases
+* There is no data in this dataset on the socioeconomic status of perpetrators (income) or of the neighborhoods in which the shooting incidents took place. There could potentially be a large correlation with income.
+* There could be possible biases in the police apprehension of suspects of a particular race, or patrolling neighborhoods in which those races are more prevalent.
+* There is no data regarding the context of the shootings, whether they were done criminally or potentially in self-defence scenarios.
+* There are some incidents with race labeled as "unknown" or "null", potentially skewing the data.
+* Perhaps my own bias led me to perform this analysis, based on media coverage and hearsay of social issues in New York.
+
